@@ -1,0 +1,45 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Configure cross account roles
+
+Parameters:
+  StackVersion:
+    Description: Stack version
+    Type: String
+    Default: 1
+  CrossAccountId:
+    Type: String
+    Description: AWS Account Id of the identity/federation account.
+    MaxLength: 12
+    MinLength: 12
+  OperatingRegion:
+    Type: String
+    Description: This limits the region into which users can operate aws resources
+    Default: "us-east-1"
+
+Resources:
+  CrossAccountRoleForDev:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cross-account-role-dev
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS:
+                - !Ref CrossAccountId
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: cross-account-role-permissions
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameters
+                  - ssm:GetParameter
+                  - ssm:ListTagsForResource
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/bg/mms-sync/*

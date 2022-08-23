@@ -1,0 +1,103 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: AWS Cross account codebuild job
+
+Parameters:
+  TargetAccount:
+    Description : Integration account ID
+    Type: String
+    AllowedPattern: '\d{12}'
+    MinLength: 12
+    MaxLength: 12
+  CodePipelineAssumeRoleName:
+    Type: String
+    Default: cross-account-role-dev
+Resources:
+  CodeBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: cross-account-code-build-job
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            build:
+              commands:
+                - aws sts get-caller-identity
+                - aws ssm get-parameter --name /bg/mms-sync/
+                - echo $SHELL
+                - |
+                   /bin/bash <<-'EOF'
+                   set -x
+                   GET_CREDENTIALS=$(aws sts assume-role \
+                   --role-arn $CROSS_ACCOUNT_ROLE \
+                   --role-session-name temp-session \
+                   --duration-seconds 3600 \
+                   --query '[Credentials.AccessKeyId,Credentials.SecretAccessKey,Credentials.SessionToken]' \
+                   --output text)
+                   # Verify Credentials 
+                   echo $CREDENTIALS
+                   set +e
+                   export AWS_REGION="us-east-1"
+                   export AWS_ACCESS_KEY_ID=$(echo $GET_CREDENTIALS | cut -d' ' -f1)
+                   export AWS_SECRET_ACCESS_KEY=$(echo $GET_CREDENTIALS | cut -d' ' -f2)
+                   export AWS_SESSION_TOKEN=$(echo $GET_CREDENTIALS | cut -d' ' -f3)
+                   aws sts get-caller-identity
+                   aws ssm get-parameter --name /bg/mms-sync/mms-sync-ingest-api
+                   EOF
+                   set -e
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Environment:
+        Type: LINUX_CONTAINER
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        ComputeType: BUILD_GENERAL1_SMALL
+        EnvironmentVariables: 
+          - Name: CROSS_ACCOUNT_ROLE
+            Type: PLAINTEXT
+            Value: !Sub 'arn:aws:iam::${TargetAccount}:role/${CodePipelineAssumeRoleName}'
+      Tags:
+        - Key: onboarding-task
+          Value: cross-account-role-access
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: crossaccount-codebuild-role
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+
+  CodeBuildPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Allows CodeBuild Policy
+      ManagedPolicyName: crossaccount-codebuild-policy
+      Roles:
+        - !Ref CodeBuildRole
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:  
+          - Action:
+              - logs:*
+            Effect: Allow
+            Resource:
+              - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*  
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Resource:
+              - !Sub 'arn:aws:iam::${TargetAccount}:role/${CodePipelineAssumeRoleName}'
+          - Action:
+              - 'ssm:GetParameter'
+            Effect: Allow  
+            Resource: 
+              - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/bg/mms-sync'
